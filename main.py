@@ -270,36 +270,138 @@ elif view_option == "Full Dataset":
 else:  # Dataset Info
     st.subheader("Dataset Information")
     
-    # Basic info
-    col1, col2 = st.columns(2)
-    
+    # Overview metrics
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.write("**Column Information:**")
-        info_df = pd.DataFrame({
-            'Column': df.columns,
-            'Data Type': df.dtypes.astype(str),
-            'Non-Null Count': df.count(),
-            'Null Count': df.isnull().sum()
-        })
-        st.dataframe(info_df)
-    
+        st.metric("Total Rows", f"{len(df):,}")
     with col2:
-        st.write("**Numerical Columns Summary:**")
+        st.metric("Total Columns", len(df.columns))
+    with col3:
+        st.metric("Numerical", len(df.select_dtypes(include=[np.number]).columns))
+    with col4:
+        st.metric("Categorical", len(df.select_dtypes(include=['object']).columns))
+    with col5:
+        missing_cells = df.isnull().sum().sum()
+        st.metric("Missing Values", f"{missing_cells:,}")
+    
+    st.divider()
+    
+    # Column Details in tabs
+    tab1, tab2, tab3, tab4 = st.tabs(["Column Details", "Numerical Summary", "Categorical Summary", "Missing Values"])
+    
+    with tab1:
+        st.write("### Column Information")
+        info_df = pd.DataFrame({
+            'Column Name': df.columns,
+            'Data Type': df.dtypes.astype(str).values,
+            'Non-Null': df.count().values,
+            'Null': df.isnull().sum().values,
+            'Null %': (df.isnull().sum() / len(df) * 100).round(2).astype(str) + '%',
+            'Unique Values': [df[col].nunique() for col in df.columns],
+            'Memory Usage': [f"{df[col].memory_usage(deep=True) / 1024:.2f} KB" for col in df.columns]
+        })
+        st.dataframe(info_df, use_container_width=True, hide_index=True)
+        
+        # Total memory usage
+        total_memory = df.memory_usage(deep=True).sum() / 1024 / 1024
+        st.caption(f"Total Memory Usage: {total_memory:.2f} MB")
+    
+    with tab2:
+        st.write("### Numerical Columns Statistics")
         numerical_cols = df.select_dtypes(include=[np.number])
         if not numerical_cols.empty:
-            st.dataframe(numerical_cols.describe())
-        else:
-            st.write("No numerical columns found.")
+            stats_df = numerical_cols.describe().T
+            stats_df['missing'] = df[numerical_cols.columns].isnull().sum()
+            stats_df['missing %'] = (stats_df['missing'] / len(df) * 100).round(2)
+            st.dataframe(stats_df, use_container_width=True)
             
-        # Categorical columns summary
+            # Distribution visualization
+            st.write("### Distribution Plots")
+            num_cols = numerical_cols.columns.tolist()
+            if len(num_cols) > 0:
+                selected_col = st.selectbox("Select column to visualize:", num_cols)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    fig_hist = px.histogram(df, x=selected_col, 
+                                          title=f"Distribution of {selected_col}",
+                                          marginal="box")
+                    st.plotly_chart(fig_hist, use_container_width=True)
+                
+                with col2:
+                    fig_box = px.box(df, y=selected_col,
+                                    title=f"Box Plot of {selected_col}")
+                    st.plotly_chart(fig_box, use_container_width=True)
+        else:
+            st.info("No numerical columns found in the dataset.")
+    
+    with tab3:
+        st.write("### Categorical Columns Summary")
         categorical_cols = df.select_dtypes(include=['object'])
         if not categorical_cols.empty:
-            st.write("**Categorical Columns:**")
+            cat_summary = []
             for col in categorical_cols.columns:
-                unique_values = df[col].nunique()
-                st.write(f"- **{col}**: {unique_values} unique values")
-                if unique_values <= 10:  # Show values if not too many
-                    st.write(f"  Values: {', '.join(df[col].unique().astype(str))}")
+                unique_count = df[col].nunique()
+                missing_count = df[col].isnull().sum()
+                most_frequent = df[col].mode()[0] if len(df[col].mode()) > 0 else "N/A"
+                most_frequent_count = df[col].value_counts().iloc[0] if len(df[col].value_counts()) > 0 else 0
+                
+                cat_summary.append({
+                    'Column Name': col,
+                    'Unique Values': unique_count,
+                    'Missing': missing_count,
+                    'Most Frequent': most_frequent,
+                    'Frequency': most_frequent_count
+                })
+            
+            cat_df = pd.DataFrame(cat_summary)
+            st.dataframe(cat_df, use_container_width=True, hide_index=True)
+            
+            # Value counts visualization
+            st.write("### Category Distribution")
+            selected_cat = st.selectbox("Select categorical column:", categorical_cols.columns.tolist())
+            
+            value_counts = df[selected_cat].value_counts().head(20)
+            fig_bar = px.bar(x=value_counts.index, y=value_counts.values,
+                           title=f"Top 20 Values in {selected_cat}",
+                           labels={'x': selected_cat, 'y': 'Count'})
+            fig_bar.update_layout(showlegend=False)
+            st.plotly_chart(fig_bar, use_container_width=True)
+            
+            # Show unique values for small cardinality
+            if df[selected_cat].nunique() <= 20:
+                st.write(f"**All unique values:** {', '.join(df[selected_cat].unique().astype(str))}")
+        else:
+            st.info("No categorical columns found in the dataset.")
+    
+    with tab4:
+        st.write("### Missing Values Analysis")
+        missing_data = pd.DataFrame({
+            'Column': df.columns,
+            'Missing Count': df.isnull().sum().values,
+            'Missing %': (df.isnull().sum() / len(df) * 100).round(2).values
+        })
+        missing_data = missing_data[missing_data['Missing Count'] > 0].sort_values('Missing Count', ascending=False)
+        
+        if len(missing_data) > 0:
+            st.dataframe(missing_data, use_container_width=True, hide_index=True)
+            
+            # Visualization
+            fig_missing = px.bar(missing_data, x='Column', y='Missing %',
+                               title="Missing Values by Column",
+                               labels={'Missing %': 'Percentage Missing'})
+            st.plotly_chart(fig_missing, use_container_width=True)
+        else:
+            st.success("No missing values found in the dataset!")
+            
+        # Correlation heatmap for completeness
+        st.write("### Missing Value Patterns")
+        if len(missing_data) > 0:
+            # Show which rows have missing values
+            rows_with_missing = df.isnull().any(axis=1).sum()
+            st.write(f"**Rows with at least one missing value:** {rows_with_missing} ({rows_with_missing/len(df)*100:.2f}%)")
+        else:
+            st.write("All rows are complete (no missing values).")
 
 st.divider()  # Add a visual separator
 
@@ -321,7 +423,11 @@ if model_type == "Regression":
     
     # Add polynomial degree parameter for non-linear regression
     if model_algo == "Non Linear Regression":
-        poly_degree = st.sidebar.slider("Non-Linear Degree", 2, 5, 2) 
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            poly_degree = st.sidebar.slider ("Non-Linear Degree", 2, 5, 2, key="poly_degree_slider")
+        with col2:
+            poly_degree = st.sidebar.number_input("", 2, 5, poly_degree, key="poly_degree_input", label_visibility="collapsed")
 elif model_type == "Classification":
     model_algo = st.sidebar.selectbox("Algorithm", ["DecisionTree", "SVM"])
     
@@ -329,14 +435,38 @@ elif model_type == "Classification":
     if model_algo == "SVM":
         st.sidebar.subheader("SVM Parameters")
         svm_kernel = st.sidebar.selectbox("Kernel", ["linear", "polynomial"])
-        svm_learning_rate = st.sidebar.slider("Learning Rate", 0.0001, 0.01, 0.001, format="%.4f")
-        svm_lambda = st.sidebar.slider("Regularization (λ)", 0.001, 0.1, 0.01, format="%.3f")
-        svm_iterations = st.sidebar.slider("Iterations", 100, 2000, 1000, step=100)
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            svm_learning_rate = st.sidebar.slider("Learning Rate", 0.0001, 0.01, 0.001, format="%.4f", key="svm_lr_slider")
+        with col2:
+            svm_learning_rate = st.sidebar.number_input("", 0.0001, 0.01, svm_learning_rate, format="%.4f", key="svm_lr_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            svm_lambda = st.sidebar.slider("Regularization (λ)", 0.001, 0.1, 0.01, format="%.3f", key="svm_lambda_slider")
+        with col2:
+            svm_lambda = st.sidebar.number_input("", 0.001, 0.1, svm_lambda, format="%.3f", key="svm_lambda_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            svm_iterations = st.sidebar.slider("Iterations", 100, 2000, 1000, step=100, key="svm_iter_slider")
+        with col2:
+            svm_iterations = st.sidebar.number_input("", 100, 2000, svm_iterations, step=100, key="svm_iter_input", label_visibility="collapsed")
         
         # Polynomial kernel specific parameters
         if svm_kernel == "polynomial":
-            svm_degree = st.sidebar.slider("Polynomial Degree", 2, 5, 3)
-            svm_coef0 = st.sidebar.slider("Coefficient (coef0)", 0.0, 2.0, 1.0, step=0.1)
+            col1, col2 = st.sidebar.columns([2, 1])
+            with col1:
+                svm_degree = st.sidebar.slider("Polynomial Degree", 2, 5, 3, key="svm_degree_slider")
+            with col2:
+                svm_degree = st.sidebar.number_input("", 2, 5, svm_degree, key="svm_degree_input", label_visibility="collapsed")
+            
+            col1, col2 = st.sidebar.columns([2, 1])
+            with col1:
+                svm_coef0 = st.sidebar.slider("Coefficient (coef0)", 0.0, 2.0, 1.0, step=0.1, key="svm_coef0_slider")
+            with col2:
+                svm_coef0 = st.sidebar.number_input("", 0.0, 2.0, svm_coef0, step=0.1, key="svm_coef0_input", label_visibility="collapsed")
 elif model_type == "Clustering":
     model_algo = st.sidebar.selectbox("Algorithm", ["KMeans", "DBSCAN"]) 
     
@@ -352,14 +482,31 @@ elif model_type == "Clustering":
             numeric_columns, 
             default=numeric_columns[:min(5, len(numeric_columns))]
         )
-        pca_components = st.sidebar.slider("PCA Components", 2, min(10, len(pca_features)) if pca_features else 2, 2, key="clustering_pca_components")
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            pca_components = st.sidebar.slider("PCA Components", 2, min(10, len(pca_features)) if pca_features else 2, 2, key="clustering_pca_components_slider")
+        with col2:
+            pca_components = st.sidebar.number_input("", 2, min(10, len(pca_features)) if pca_features else 2, pca_components, key="clustering_pca_components_input", label_visibility="collapsed")
     
     # Clustering parameters (always visible when clustering is selected)
     if model_algo == "KMeans":
-        n_clusters = st.sidebar.slider("Number of Clusters", 2, 10, 3, key="kmeans_clusters")
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            n_clusters = st.sidebar.slider("Number of Clusters", 2, 10, 3, key="kmeans_clusters_slider")
+        with col2:
+            n_clusters = st.sidebar.number_input("", 2, 10, n_clusters, key="kmeans_clusters_input", label_visibility="collapsed")
     elif model_algo == "DBSCAN":
-        eps = st.sidebar.slider("Epsilon (eps)", 0.1, 5.0, 0.5, key="dbscan_eps")
-        min_samples = st.sidebar.slider("Min Samples", 1, 25, 5, key="dbscan_min_samples")
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            eps = st.sidebar.slider("Epsilon (eps)", 0.1, 5.0, 0.5, key="dbscan_eps_slider")
+        with col2:
+            eps = st.sidebar.number_input("", 0.1, 5.0, eps, key="dbscan_eps_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            min_samples = st.sidebar.slider("Min Samples", 1, 25, 5, key="dbscan_min_samples_slider")
+        with col2:
+            min_samples = st.sidebar.number_input("", 1, 25, min_samples, key="dbscan_min_samples_input", label_visibility="collapsed")
 elif model_type == "PCA":
     st.sidebar.subheader("PCA Parameters")
     
@@ -375,12 +522,24 @@ elif model_type == "PCA":
     
     # Number of components
     if len(feature_cols) >= 2:
-        n_components = st.sidebar.number_input(
-            "Select Number of Components (n)", 
-            min_value=2, 
-            max_value=len(feature_cols), 
-            value=2
-        )
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            n_components = st.sidebar.slider(
+                "Number of Components", 
+                min_value=2, 
+                max_value=len(feature_cols), 
+                value=2,
+                key="pca_components_slider"
+            )
+        with col2:
+            n_components = st.sidebar.number_input(
+                "", 
+                min_value=2, 
+                max_value=len(feature_cols), 
+                value=n_components,
+                key="pca_components_input",
+                label_visibility="collapsed"
+            )
     else:
         n_components = 2
     
@@ -396,21 +555,73 @@ elif model_type == "Ensemble Learning":
     st.sidebar.subheader("Ensemble Parameters")
     
     if model_algo == "Random Forest":
-        n_estimators = st.sidebar.slider("Number of Trees (n_estimators)", 10, 500, 100, step=10)
-        max_depth = st.sidebar.slider("Max Depth", 1, 30, 10)
-        min_samples_split = st.sidebar.slider("Min Samples Split", 2, 20, 2)
-        min_samples_leaf = st.sidebar.slider("Min Samples Leaf", 1, 20, 1)
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            n_estimators = st.sidebar.slider("Number of Trees (n_estimators)", 10, 500, 100, step=10, key="rf_estimators_slider")
+        with col2:
+            n_estimators = st.sidebar.number_input("", 10, 500, n_estimators, step=10, key="rf_estimators_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            max_depth = st.sidebar.slider("Max Depth", 1, 30, 10, key="rf_depth_slider")
+        with col2:
+            max_depth = st.sidebar.number_input("", 1, 30, max_depth, key="rf_depth_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            min_samples_split = st.sidebar.slider("Min Samples Split", 2, 20, 2, key="rf_split_slider")
+        with col2:
+            min_samples_split = st.sidebar.number_input("", 2, 20, min_samples_split, key="rf_split_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            min_samples_leaf = st.sidebar.slider("Min Samples Leaf", 1, 20, 1, key="rf_leaf_slider")
+        with col2:
+            min_samples_leaf = st.sidebar.number_input("", 1, 20, min_samples_leaf, key="rf_leaf_input", label_visibility="collapsed")
         
     elif model_algo == "AdaBoost":
-        n_estimators = st.sidebar.slider("Number of Estimators", 10, 500, 50, step=10)
-        learning_rate = st.sidebar.slider("Learning Rate", 0.01, 2.0, 1.0, step=0.01)
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            n_estimators = st.sidebar.slider("Number of Estimators", 10, 500, 50, step=10, key="ada_estimators_slider")
+        with col2:
+            n_estimators = st.sidebar.number_input("", 10, 500, n_estimators, step=10, key="ada_estimators_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            learning_rate = st.sidebar.slider("Learning Rate", 0.01, 2.0, 1.0, step=0.01, key="ada_lr_slider")
+        with col2:
+            learning_rate = st.sidebar.number_input("", 0.01, 2.0, learning_rate, step=0.01, key="ada_lr_input", label_visibility="collapsed")
         
     elif model_algo == "XGBoost":
-        n_estimators = st.sidebar.slider("Number of Estimators", 10, 500, 100, step=10)
-        max_depth = st.sidebar.slider("Max Depth", 1, 30, 6)
-        learning_rate = st.sidebar.slider("Learning Rate", 0.01, 1.0, 0.3, step=0.01)
-        subsample = st.sidebar.slider("Subsample Ratio", 0.5, 1.0, 1.0, step=0.05)
-        colsample_bytree = st.sidebar.slider("Column Sample Ratio", 0.5, 1.0, 1.0, step=0.05)
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            n_estimators = st.sidebar.slider("Number of Estimators", 10, 500, 100, step=10, key="xgb_estimators_slider")
+        with col2:
+            n_estimators = st.sidebar.number_input("", 10, 500, n_estimators, step=10, key="xgb_estimators_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            max_depth = st.sidebar.slider("Max Depth", 1, 30, 6, key="xgb_depth_slider")
+        with col2:
+            max_depth = st.sidebar.number_input("", 1, 30, max_depth, key="xgb_depth_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            learning_rate = st.sidebar.slider("Learning Rate", 0.01, 1.0, 0.3, step=0.01, key="xgb_lr_slider")
+        with col2:
+            learning_rate = st.sidebar.number_input("", 0.01, 1.0, learning_rate, step=0.01, key="xgb_lr_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            subsample = st.sidebar.slider("Subsample Ratio", 0.5, 1.0, 1.0, step=0.05, key="xgb_subsample_slider")
+        with col2:
+            subsample = st.sidebar.number_input("", 0.5, 1.0, subsample, step=0.05, key="xgb_subsample_input", label_visibility="collapsed")
+        
+        col1, col2 = st.sidebar.columns([2, 1])
+        with col1:
+            colsample_bytree = st.sidebar.slider("Column Sample Ratio", 0.5, 1.0, 1.0, step=0.05, key="xgb_colsample_slider")
+        with col2:
+            colsample_bytree = st.sidebar.number_input("", 0.5, 1.0, colsample_bytree, step=0.05, key="xgb_colsample_input", label_visibility="collapsed")
 
 # No additional parameters needed for DecisionTree
 
