@@ -22,17 +22,34 @@ from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, confus
 class SVMFromScratch:
     """
     Support Vector Machine implemented from scratch using gradient descent.
-    Supports binary classification with linear kernel.
+    Supports binary classification with linear and polynomial kernels.
     """
-    def __init__(self, learning_rate=0.001, lambda_param=0.01, n_iterations=1000):
+    def __init__(self, learning_rate=0.001, lambda_param=0.01, n_iterations=1000, kernel='linear', degree=3, coef0=1):
         self.learning_rate = learning_rate
         self.lambda_param = lambda_param  # Regularization parameter
         self.n_iterations = n_iterations
+        self.kernel = kernel  # 'linear' or 'polynomial'
+        self.degree = degree  # Degree for polynomial kernel
+        self.coef0 = coef0  # Independent term for polynomial kernel
         self.w = None  # Weights
         self.b = None  # Bias
         self.classes_ = None
         self.support_vectors_ = None
         self.support_vector_indices_ = None
+        self.X_train = None  # Store training data for kernel methods
+    
+    def _apply_kernel(self, X):
+        """Apply the selected kernel transformation to the input features"""
+        if self.kernel == 'linear':
+            return X
+        elif self.kernel == 'polynomial':
+            # Polynomial kernel: (gamma * X + coef0)^degree
+            # For simplicity, we'll apply feature transformation
+            # K(x, y) = (x·y + coef0)^degree
+            poly = PolynomialFeatures(degree=self.degree, include_bias=False)
+            return poly.fit_transform(X)
+        else:
+            raise ValueError(f"Unsupported kernel: {self.kernel}")
         
     def fit(self, X, y):
         """Train the SVM model using gradient descent"""
@@ -57,7 +74,10 @@ class SVMFromScratch:
         else:
             raise ValueError("This SVM implementation only supports binary classification")
         
-        n_samples, n_features = X.shape
+        # Apply kernel transformation
+        X_transformed = self._apply_kernel(X)
+        
+        n_samples, n_features = X_transformed.shape
         
         # Initialize weights and bias
         self.w = np.zeros(n_features, dtype=np.float64)
@@ -66,7 +86,7 @@ class SVMFromScratch:
         # Gradient descent optimization
         for iteration in range(self.n_iterations):
             for idx in range(n_samples):
-                x_i = X[idx].astype(np.float64)
+                x_i = X_transformed[idx].astype(np.float64)
                 condition = y_binary[idx] * (np.dot(x_i, self.w) - self.b) >= 1
                 
                 if condition:
@@ -78,11 +98,16 @@ class SVMFromScratch:
                     self.b -= self.learning_rate * y_binary[idx]
         
         # Identify support vectors (points close to decision boundary)
-        distances = np.abs(np.dot(X, self.w) - self.b)
+        distances = np.abs(np.dot(X_transformed, self.w) - self.b)
         margin = 1.0 / np.linalg.norm(self.w)
         # Support vectors are points within or on the margin
         self.support_vector_indices_ = np.where(distances <= margin * 1.1)[0]  # 10% tolerance
-        self.support_vectors_ = X[self.support_vector_indices_]
+        self.support_vectors_ = X[self.support_vector_indices_]  # Store original X
+        
+        # Store the polynomial transformer for prediction
+        if self.kernel == 'polynomial':
+            self.poly_transformer_ = PolynomialFeatures(degree=self.degree, include_bias=False)
+            self.poly_transformer_.fit(X)
         
         return self
     
@@ -90,8 +115,11 @@ class SVMFromScratch:
         """Predict class labels for samples in X"""
         if hasattr(X, 'values'):
             X = X.values
+        
+        # Apply kernel transformation
+        X_transformed = self._apply_kernel(X)
             
-        linear_output = np.dot(X, self.w) - self.b
+        linear_output = np.dot(X_transformed, self.w) - self.b
         y_pred_binary = np.sign(linear_output)
         
         # Convert back to original class labels
@@ -103,7 +131,11 @@ class SVMFromScratch:
         """Compute the decision function for samples in X"""
         if hasattr(X, 'values'):
             X = X.values
-        return np.dot(X, self.w) - self.b
+        
+        # Apply kernel transformation
+        X_transformed = self._apply_kernel(X)
+        
+        return np.dot(X_transformed, self.w) - self.b
     
     def get_params(self):
         """Return model parameters"""
@@ -113,7 +145,9 @@ class SVMFromScratch:
             'n_support_vectors': len(self.support_vector_indices_) if self.support_vector_indices_ is not None else 0,
             'learning_rate': self.learning_rate,
             'lambda_param': self.lambda_param,
-            'n_iterations': self.n_iterations
+            'n_iterations': self.n_iterations,
+            'kernel': self.kernel,
+            'degree': self.degree if self.kernel == 'polynomial' else None
         }
 
 
@@ -294,9 +328,15 @@ elif model_type == "Classification":
     # Add SVM hyperparameters
     if model_algo == "SVM":
         st.sidebar.subheader("SVM Parameters")
+        svm_kernel = st.sidebar.selectbox("Kernel", ["linear", "polynomial"])
         svm_learning_rate = st.sidebar.slider("Learning Rate", 0.0001, 0.01, 0.001, format="%.4f")
         svm_lambda = st.sidebar.slider("Regularization (λ)", 0.001, 0.1, 0.01, format="%.3f")
         svm_iterations = st.sidebar.slider("Iterations", 100, 2000, 1000, step=100)
+        
+        # Polynomial kernel specific parameters
+        if svm_kernel == "polynomial":
+            svm_degree = st.sidebar.slider("Polynomial Degree", 2, 5, 3)
+            svm_coef0 = st.sidebar.slider("Coefficient (coef0)", 0.0, 2.0, 1.0, step=0.1)
 elif model_type == "Clustering":
     model_algo = st.sidebar.selectbox("Algorithm", ["KMeans", "DBSCAN"]) 
     
@@ -647,11 +687,23 @@ if run_button:
                 """)
                 st.stop()
             
-            model = SVMFromScratch(
-                learning_rate=svm_learning_rate,
-                lambda_param=svm_lambda,
-                n_iterations=svm_iterations
-            )
+            # Create SVM model with kernel parameters
+            if svm_kernel == "polynomial":
+                model = SVMFromScratch(
+                    learning_rate=svm_learning_rate,
+                    lambda_param=svm_lambda,
+                    n_iterations=svm_iterations,
+                    kernel='polynomial',
+                    degree=svm_degree,
+                    coef0=svm_coef0
+                )
+            else:
+                model = SVMFromScratch(
+                    learning_rate=svm_learning_rate,
+                    lambda_param=svm_lambda,
+                    n_iterations=svm_iterations,
+                    kernel='linear'
+                )
 
         model.fit(X_train, y_train)
         preds = model.predict(X_test)
@@ -757,8 +809,13 @@ if run_button:
             col1, col2 = st.columns(2)
             
             with col1:
+                kernel_info = f"**Kernel:** {params['kernel'].capitalize()}"
+                if params['kernel'] == 'polynomial':
+                    kernel_info += f"\n- Polynomial Degree: {params['degree']}"
+                
                 st.info(f"""
                 **SVM Hyperparameters:**
+                {kernel_info}
                 - Learning Rate: {params['learning_rate']:.4f}
                 - Regularization (λ): {params['lambda_param']:.3f}
                 - Training Iterations: {params['n_iterations']}
@@ -909,7 +966,8 @@ if run_button:
                 # Feature weights visualization
                 st.subheader("Feature Importance (Weight Magnitudes)")
                 
-                if hasattr(X_train, 'columns'):
+                if hasattr(X_train, 'columns') and params['kernel'] == 'linear':
+                    # Only show original feature weights for linear kernel
                     feature_importance = pd.DataFrame({
                         'Feature': X_train.columns,
                         'Weight': params['weights'],
@@ -933,6 +991,19 @@ if run_button:
                     - Larger absolute weights = more important features for classification
                     - Positive weights push prediction toward one class
                     - Negative weights push prediction toward the other class
+                    """)
+                elif params['kernel'] == 'polynomial':
+                    st.info(f"""
+                    **Polynomial Kernel Feature Space:**
+                    
+                    With polynomial kernel (degree {params['degree']}), the model operates in a transformed {len(params['weights'])}-dimensional feature space.
+                    
+                    - Original features: {len(X_train.columns)}
+                    - Transformed features: {len(params['weights'])}
+                    - The model learns weights for polynomial combinations of features
+                    - Feature importance is implicit in the kernel transformation
+                    
+                    **Note:** Direct feature weights don't map to original features in polynomial kernel space.
                     """)
         
         # Prediction probabilities visualization (if available)
